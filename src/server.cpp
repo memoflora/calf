@@ -1,11 +1,13 @@
 #include "server.h"
 
 #include "protocol.h"
+#include "writer.h"
 
 #include <arpa/inet.h>
 #include <array>
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <sys/socket.h>
@@ -38,9 +40,8 @@ std::vector<std::byte> make_reply(uint8_t status) {
     return reply;
 }
 
-void handle_connection(int fd) {
+void handle_connection(int fd, Writer& writer) {
     FdGuard guard(fd);
-    const std::vector<std::byte> ok = make_reply(kStatusOk);
 
     for (;;) {
         std::array<std::byte, 4> header;
@@ -52,16 +53,19 @@ void handle_connection(int fd) {
 
         std::vector<std::byte> payload(len);
         if (!read_exact(fd, payload)) return;
-        if (!parse_request(payload)) return;
+        std::optional<WriteRequest> req = parse_request(payload);
+        if (!req) return;
 
-        // Step 1 has no storage: OK does not mean durable yet.
-        if (!write_exact(fd, ok)) return;
+        // get() blocks until the writer has synced or rejected the request.
+        // This thread reads no new frame meanwhile: one request in flight.
+        Status status = writer.submit(std::move(*req)).get();
+        if (!write_exact(fd, make_reply(static_cast<uint8_t>(status)))) return;
     }
 }
 
 }  // namespace
 
-int run_server(uint16_t port) {
+int run_server(uint16_t port, Wal wal, size_t max_batch) {
     int lfd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (lfd < 0) {
         std::perror("socket");
@@ -87,6 +91,7 @@ int run_server(uint16_t port) {
         std::perror("listen");
         return 1;
     }
+    Writer writer(std::move(wal), max_batch);
     std::fprintf(stderr, "listening on 127.0.0.1:%u\n", static_cast<unsigned>(port));
 
     for (;;) {
@@ -97,7 +102,9 @@ int run_server(uint16_t port) {
             // Other errors (for example EMFILE) repeat at once, so a retry
             // spins at 100% CPU. The connection cap is for later.
             std::perror("accept");
-            return 1;
+            // _exit, not return: detached threads still use writer, which
+            // lives in this frame. Acked writes are already durable.
+            std::_Exit(1);
         }
 
         int one = 1;
@@ -106,7 +113,9 @@ int run_server(uint16_t port) {
         // [fd], not [&fd]: fd dies with this iteration, the detached thread
         // does not.
         try {
-            std::thread([fd] { handle_connection(fd); }).detach();
+            // &writer is safe: writer lives until the process ends, because
+            // this function never returns after the writer starts.
+            std::thread([fd, &writer] { handle_connection(fd, writer); }).detach();
         } catch (const std::system_error& e) {
             // No thread started, so no FdGuard owns fd. Close it here.
             std::fprintf(stderr, "thread: %s\n", e.what());

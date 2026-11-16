@@ -2,3 +2,5 @@ build*/
 .claude/
 .cache/
 .idea/
+*.wal
+__pycache__/

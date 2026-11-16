@@ -1,13 +1,24 @@
 #!/usr/bin/env python3
 # Sends valid, malformed, and split frames to a running server and checks each
 # result. Usage: tests/bad_frames.py [port]. Exit code 0 if all cases pass.
+import itertools
 import socket
 import struct
 import sys
+import threading
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 7070
-OK = "ok"          # reply with length 1 and status 0
-CLOSED = "closed"  # server closed the connection with no reply
+OK = "ok"              # reply with length 1 and status 0
+REJECTED = "rejected"  # reply with length 1 and status 1
+CLOSED = "closed"      # server closed the connection with no reply
+
+# The server rejects a timestamp <= the last one in a series, so each valid
+# case writes to its own series.
+_names = itertools.count()
+
+
+def new_name():
+    return b"s%d" % next(_names)
 
 
 def connect():
@@ -18,11 +29,21 @@ def connect():
     return s
 
 
-def payload(msg_type=1, name=b"ab", samples=1, sample_count=None, extra=b""):
+def payload(msg_type=1, name=None, samples=1, sample_count=None, extra=b""):
+    name = new_name() if name is None else name
     count = samples if sample_count is None else sample_count
     p = struct.pack("<BHH", msg_type, 1, len(name)) + name + struct.pack("<I", count)
     p += b"".join(struct.pack("<qQ", i, 0) for i in range(samples))
     return p + extra
+
+
+def multi(series):
+    """series is a list of (name, [ts_ms, ...])."""
+    p = struct.pack("<BH", 1, len(series))
+    for name, stamps in series:
+        p += struct.pack("<H", len(name)) + name + struct.pack("<I", len(stamps))
+        p += b"".join(struct.pack("<qQ", ts, 0) for ts in stamps)
+    return p
 
 
 def frame(p):
@@ -42,7 +63,8 @@ def result(s):
     except ConnectionResetError:
         return CLOSED
     if len(data) == 5:
-        return OK if struct.unpack("<IB", data) == (1, 0) else "bad reply %r" % data
+        return {(1, 0): OK, (1, 1): REJECTED}.get(struct.unpack("<IB", data),
+                                                  "bad reply %r" % data)
     return CLOSED if not data else "short reply %r" % data
 
 
@@ -67,6 +89,54 @@ def two_requests():
         results.append(result(s))
     s.close()
     return OK if results == [OK, OK] else str(results)
+
+
+def sequence(payloads):
+    s = connect()
+    results = []
+    for p in payloads:
+        s.sendall(frame(p))
+        results.append(result(s))
+    s.close()
+    return results
+
+
+def last_of(payloads, want_before):
+    # The earlier requests set up the series. They must give want_before.
+    results = sequence(payloads)
+    if results[:-1] != want_before:
+        return "setup gave %s" % results[:-1]
+    return results[-1]
+
+
+def rejection_leaves_no_trace():
+    a, b = new_name(), new_name()
+    # b is bad, so the whole request is rejected, and a must stay unused.
+    return last_of([multi([(a, [5]), (b, [2, 1])]), multi([(a, [5])])], [REJECTED])
+
+
+def same_ts_from_many_connections():
+    # Many connections in flight usually land in one batch, so this checks the
+    # rule against earlier requests in the same batch, not only the store.
+    name = new_name()
+    results = []
+    lock = threading.Lock()
+
+    def one():
+        r = send_and_check(frame(multi([(name, [7])])))
+        with lock:
+            results.append(r)
+
+    threads = [threading.Thread(target=one) for _ in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    if results.count(OK) == 1 and results.count(REJECTED) == 19:
+        return OK
+    return "ok=%d rejected=%d other=%s" % (
+        results.count(OK), results.count(REJECTED),
+        [r for r in results if r not in (OK, REJECTED)])
 
 
 def abrupt_closes_then_valid():
@@ -104,6 +174,22 @@ CASES = [
     ("1 extra byte after last series", CLOSED,
      lambda: send_and_check(frame(payload(extra=b"\0")))),
     ("valid frame after 200 abrupt closes", OK, abrupt_closes_then_valid),
+    ("timestamp equal to last", REJECTED,
+     lambda: (lambda n: last_of([multi([(n, [5])]), multi([(n, [5])])], [OK]))(new_name())),
+    ("timestamp lower than last", REJECTED,
+     lambda: (lambda n: last_of([multi([(n, [5])]), multi([(n, [4])])], [OK]))(new_name())),
+    ("timestamp higher than last", OK,
+     lambda: (lambda n: last_of([multi([(n, [5])]), multi([(n, [6])])], [OK]))(new_name())),
+    ("decreasing timestamps in one request", REJECTED,
+     lambda: send_and_check(frame(multi([(new_name(), [2, 1])])))),
+    ("same name twice, second lower", REJECTED,
+     lambda: (lambda n: send_and_check(frame(multi([(n, [5]), (n, [4])]))))(new_name())),
+    ("same name twice, second higher", OK,
+     lambda: (lambda n: send_and_check(frame(multi([(n, [5]), (n, [6])]))))(new_name())),
+    ("empty name with samples", REJECTED,
+     lambda: send_and_check(frame(multi([(b"", [1])])))),
+    ("rejected request leaves no trace", OK, rejection_leaves_no_trace),
+    ("same ts from 20 connections", OK, same_ts_from_many_connections),
 ]
 
 
