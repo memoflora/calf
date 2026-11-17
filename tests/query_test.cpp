@@ -46,7 +46,6 @@ Head make_head() {
     return h;
 }
 
-// The reference: a linear scan over every sample.
 std::vector<Sample> expected(int64_t start, int64_t end) {
     std::vector<Sample> out;
     for (int i = 0; i < kN; ++i) {

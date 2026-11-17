@@ -41,6 +41,9 @@ target_link_libraries(chunk_stats PRIVATE calf_core)
 add_executable(query tools/query.cpp)
 target_link_libraries(query PRIVATE calf_protocol)
 
+add_executable(bench tools/bench.cpp)
+target_link_libraries(bench PRIVATE calf_protocol)
+
 enable_testing()
 add_executable(record_test tests/record_test.cpp)
 target_link_libraries(record_test PRIVATE calf_core)

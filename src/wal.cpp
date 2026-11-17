@@ -10,7 +10,6 @@ namespace calf {
 
 namespace {
 
-// Makes appended data durable.
 bool sync_fd(int fd) {
 #ifdef __APPLE__
     // macOS fsync() only moves data to the drive, which can keep it in a
@@ -73,11 +72,8 @@ std::optional<Wal> Wal::open(const std::string& path) {
     }
     Wal wal(fd);
 
-    // The directory entry is not durable until the directory is synced.
-    // Without this, a crash can lose the whole file, acked records included.
-    // Sync on every open, not only when the file is new: a crash after the
-    // create but before the sync leaves an existing file whose entry may
-    // still not be durable.
+    // Sync the directory, or a crash can lose the file entry. Do it on every
+    // open: an earlier run can crash before its sync.
     if (!sync_parent_dir(path)) return std::nullopt;
     return wal;
 }

@@ -44,9 +44,8 @@ std::optional<std::vector<Sample>> Head::query(const std::string& name, int64_t 
                                                int64_t end) const {
     if (start > end) return std::nullopt;
 
-    // Copy the bytes under the lock and decode after it is released: the
-    // writer waits for the unique lock while any query holds the shared
-    // lock, and every ack waits for the writer.
+    // Decode after the unlock: a slow query would block the writer, and every
+    // ack waits for the writer.
     std::vector<std::vector<std::byte>> copies;
     {
         std::shared_lock lock(mu_);
@@ -56,8 +55,8 @@ std::optional<std::vector<Sample>> Head::query(const std::string& name, int64_t 
             if (c.min_t() > end) break;  // full chunks are sorted by time
             if (c.max_t() >= start) copies.emplace_back(c.bytes().begin(), c.bytes().end());
         }
-        // The writer appends to the open chunk, so this copy must also be
-        // made under the lock. min_t and max_t mean nothing when count is 0.
+        // Copy under the lock: the writer appends to the open chunk. min_t and
+        // max_t mean nothing when count is 0.
         const Chunk& o = d->open;
         if (o.count() > 0 && o.min_t() <= end && o.max_t() >= start) {
             copies.emplace_back(o.bytes().begin(), o.bytes().end());

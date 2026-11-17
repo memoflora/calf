@@ -36,7 +36,7 @@ bool same(const std::vector<Sample>& a, const std::vector<Sample>& b) {
     return true;
 }
 
-// Decodes bytes. ok is false if the iterator reported an error.
+// ok is false if the iterator reported an error.
 std::vector<Sample> decode(std::span<const std::byte> bytes, bool& ok) {
     std::vector<Sample> out;
     ChunkIterator it(bytes);
@@ -125,9 +125,8 @@ void test_varints() {
     assert(!read_uvarint(truncated).has_value());
 }
 
-// Written by hand from step4.md as bit strings, not with Chunk, so a shared
-// bug cannot make both sides agree. It covers sample 0, sample 1, dod 0,
-// dod +1 and -1, a new window, a reused window, and an equal value.
+// Written by hand from step4.md, not with Chunk, so a shared bug cannot make
+// both sides agree.
 void test_golden() {
     Chunk c;
     assert(c.append(1000, 1.0));

@@ -121,8 +121,7 @@ DecodeResult decode_records(std::span<const std::byte> bytes) {
             res.stop = Stop::BadType;
             return res;
         }
-        // Checked before the payload is used: a damaged length can be up to
-        // 4 GiB.
+        // A damaged length can be up to 4 GiB.
         uint32_t len = get_u32(rest.subspan(1));
         if (len > kMaxRecordPayload) {
             res.stop = Stop::BadLength;

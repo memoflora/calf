@@ -17,7 +17,7 @@ public:
     explicit BitWriter(std::vector<std::byte> start) : bytes_(std::move(start)) {}
 
     void write_bit(bool bit);
-    // Writes the low n bits of value, n in 1..64.
+    // n in 1..64
     void write_bits(uint64_t value, int n);
 
     std::vector<std::byte>& bytes() { return bytes_; }
@@ -32,8 +32,7 @@ class BitReader {
 public:
     explicit BitReader(std::span<const std::byte> bytes) : bytes_(bytes) {}
 
-    // nullopt if the bytes end first. A truncated chunk is an error, not a
-    // read past the buffer.
+    // nullopt if the bytes end first.
     std::optional<bool> read_bit();
     std::optional<uint64_t> read_bits(int n);  // n in 1..64
 

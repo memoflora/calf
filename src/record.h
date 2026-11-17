@@ -11,9 +11,8 @@ namespace calf {
 inline constexpr uint8_t kRecordCommit = 1;
 inline constexpr size_t kRecordHeader = 9;  // type + length + crc
 
-// A 16 MiB frame holds at most about 1 Mi samples at 16 bytes each. A WAL
-// sample is 20 bytes, so a valid payload stays below about 21 MiB. Anything
-// larger is a damaged length field.
+// A valid payload stays below 21 MiB (1 Mi samples x 20 bytes). A larger length
+// is damaged.
 inline constexpr uint32_t kMaxRecordPayload = 32u * 1024 * 1024;
 
 struct NewSeries {
@@ -43,11 +42,9 @@ struct DecodeResult {
     Stop stop = Stop::End;
 };
 
-// Appends one COMMIT record to out.
 void encode_commit(const CommitRecord& rec, std::vector<std::byte>& out);
 
-// Decodes records from the start of bytes until the first one that is not
-// complete and valid.
+// Stops at the first record that is incomplete or invalid.
 DecodeResult decode_records(std::span<const std::byte> bytes);
 
 const char* stop_name(Stop stop);

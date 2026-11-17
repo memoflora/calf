@@ -39,11 +39,9 @@ stop_server() {
     PID=""
 }
 
-# Queries every series in the client logs over its whole range and writes
-# "name ts value_bits" lines to $1. The series names and ranges come from
-# the S lines, so a sample written by a request without an A still shows.
-# The loop reads from < <(...), not from a pipe: a pipe runs the loop in a
-# subshell, and fail there would not stop the script.
+# Writes "name ts value_bits" to $1. Ranges come from S lines, so a sample
+# without an A still shows. < <(...), not a pipe: a piped loop runs in a
+# subshell, where fail does not stop the script.
 query_all() {
     : >"$1"
     local name lo hi out

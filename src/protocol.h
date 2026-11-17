@@ -13,11 +13,11 @@ namespace calf {
 inline constexpr uint32_t kMaxFrame = 16u * 1024 * 1024;
 inline constexpr uint8_t kMsgWrite = 1;
 inline constexpr uint8_t kMsgQuery = 2;
+inline constexpr uint8_t kMsgStats = 3;
 inline constexpr uint8_t kStatusOk = 0;
 inline constexpr uint8_t kStatusError = 1;
 
-// The length field of a reply with n samples is 1 + 4 + 16 * n, so this many
-// samples fit in one frame.
+// Reply length is 1 + 4 + 16 * n, so this is the most samples one frame holds.
 inline constexpr size_t kMaxQuerySamples = 1'000'000;
 static_assert(1 + 4 + 16 * kMaxQuerySamples <= kMaxFrame);
 
@@ -54,7 +54,9 @@ struct QueryRequest {
     int64_t end_ms;
 };
 
-using Request = std::variant<WriteRequest, QueryRequest>;
+struct StatsRequest {};
+
+using Request = std::variant<WriteRequest, QueryRequest, StatsRequest>;
 
 // payload excludes the u32 length. Returns nullopt if it is malformed.
 std::optional<Request> parse_request(std::span<const std::byte> payload);

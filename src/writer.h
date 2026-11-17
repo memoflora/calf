@@ -19,16 +19,22 @@ namespace calf {
 
 enum class Status : uint8_t { ok = kStatusOk, rejected = kStatusError };
 
+struct WriterStats {
+    uint64_t batches;
+    uint64_t requests;
+};
+
 // The writer thread runs forever, so a Writer must never be destroyed:
 // destroying a joinable std::thread calls std::terminate.
 class Writer {
 public:
-    // head and next_id come from replay. head must outlive the Writer.
-    // max_batch 0 means no limit.
+    // head must outlive the Writer. max_batch 0 means no limit.
     Writer(Wal wal, Head& head, uint32_t next_id, size_t max_batch);
 
     // The future is ready after the request is durable or rejected.
     std::future<Status> submit(WriteRequest req);
+
+    WriterStats stats();
 
 private:
     struct Pending {
@@ -51,6 +57,9 @@ private:
     std::mutex mu_;
     std::condition_variable cv_;
     std::vector<Pending> queue_;  // guarded by mu_
+    // The writer takes mu_ once per batch anyway, so the counters use it too:
+    // no atomic and no second lock.
+    WriterStats stats_{0, 0};  // guarded by mu_
 
     // Used only by the writer thread.
     Wal wal_;
@@ -58,8 +67,8 @@ private:
     const size_t max_batch_;
     uint32_t next_id_;
 
-    // Last member: the thread starts in the constructor and uses the members
-    // above, so they must be constructed first.
+    // Last member: the thread uses the members above, so they must be
+    // constructed first.
     std::thread thread_;
 };
 

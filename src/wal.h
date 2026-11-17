@@ -13,8 +13,8 @@ std::optional<std::vector<std::byte>> read_file(const std::string& path);
 
 class Wal {
 public:
-    // Opens the WAL file, or creates it if it does not exist. Prints the
-    // error and returns nullopt on failure.
+    // Creates the file if needed. Prints the error and returns nullopt on
+    // failure.
     static std::optional<Wal> open(const std::string& path);
 
     ~Wal();

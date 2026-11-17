@@ -56,6 +56,15 @@ std::vector<std::byte> make_query_reply(const std::optional<std::vector<Sample>>
     return reply;
 }
 
+std::vector<std::byte> make_stats_reply(const WriterStats& s) {
+    std::vector<std::byte> reply;
+    put_u32(reply, 17);
+    reply.push_back(std::byte{kStatusOk});
+    put_u64(reply, s.batches);
+    put_u64(reply, s.requests);
+    return reply;
+}
+
 void handle_connection(int fd, Writer& writer, const Head& head) {
     FdGuard guard(fd);
 
@@ -72,16 +81,16 @@ void handle_connection(int fd, Writer& writer, const Head& head) {
         std::optional<Request> req = parse_request(payload);
         if (!req) return;
 
-        // This thread reads no new frame until it sends the reply: one
-        // request in flight.
+        // One request in flight: no new frame until the reply is sent.
         std::vector<std::byte> reply;
         if (auto* w = std::get_if<WriteRequest>(&*req)) {
             // get() blocks until the writer has synced or rejected the request.
             Status status = writer.submit(std::move(*w)).get();
             reply = make_reply(static_cast<uint8_t>(status));
+        } else if (auto* q = std::get_if<QueryRequest>(&*req)) {
+            reply = make_query_reply(head.query(q->name, q->start_ms, q->end_ms));
         } else {
-            const auto& q = std::get<QueryRequest>(*req);
-            reply = make_query_reply(head.query(q.name, q.start_ms, q.end_ms));
+            reply = make_stats_reply(writer.stats());
         }
         if (!write_exact(fd, reply)) return;
     }
@@ -124,7 +133,7 @@ int run_server(uint16_t port, Wal wal, Head head, uint32_t next_id, size_t max_b
             // ECONNABORTED: the peer reset before accept(). Not a server error.
             if (errno == EINTR || errno == ECONNABORTED) continue;
             // Other errors (for example EMFILE) repeat at once, so a retry
-            // spins at 100% CPU. The connection cap is for later.
+            // would spin.
             std::perror("accept");
             // _exit, not return: detached threads still use writer and head,
             // which live in this frame. Acked writes are already durable.

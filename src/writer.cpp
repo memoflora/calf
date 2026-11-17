@@ -29,15 +29,18 @@ std::future<Status> Writer::submit(WriteRequest req) {
     return fut;
 }
 
+WriterStats Writer::stats() {
+    std::lock_guard lock(mu_);
+    return stats_;
+}
+
 void Writer::run() {
     for (;;) {
         std::vector<Pending> batch;
         {
             std::unique_lock lock(mu_);
-            // The predicate is checked again after every wakeup, so a spurious
-            // wakeup with an empty queue goes back to sleep. It is also checked
-            // before the first wait, so a notify sent while the writer was busy
-            // is not lost.
+            // The predicate is checked before the first wait and after every
+            // wakeup: no lost notify, no spurious wakeup.
             cv_.wait(lock, [this] { return !queue_.empty(); });
             if (max_batch_ == 0 || queue_.size() <= max_batch_) {
                 batch.swap(queue_);
@@ -47,9 +50,13 @@ void Writer::run() {
                              std::make_move_iterator(end));
                 queue_.erase(queue_.begin(), end);
             }
+            // Counted here, not after process(): a rejected request is still
+            // a request in the batch.
+            stats_.batches += 1;
+            stats_.requests += batch.size();
         }
-        // The lock is released here: connection threads can queue new
-        // requests during the write and the sync. They go into the next batch.
+        // Unlocked during the write and the sync, so new requests queue for the
+        // next batch.
         process(batch);
     }
 }
@@ -65,9 +72,9 @@ void Writer::process(std::vector<Pending>& batch) {
     }
 
     if (!records.empty()) {
-        // After a failed write or sync, the file state is unknown: a retry of
-        // fsync can report success for data that the kernel already dropped.
-        // Stop at once and let recovery read the WAL.
+        // After a failed write or sync the file state is unknown, and a retried
+        // fsync can report success for dropped data. Stop; recovery reads the
+        // WAL.
         if (!wal_.append(records)) {
             std::perror("WAL write");
             std::abort();
@@ -78,10 +85,9 @@ void Writer::process(std::vector<Pending>& batch) {
         }
     }
 
-    // Apply only after the sync, so the store never holds a write that a
-    // crash could undo. A false result means the writer and Head disagree.
-    // The records are already durable, and the next replay refuses to start
-    // on the same record, so stopping now gives the same behavior.
+    // Apply only after the sync, so Head never holds a write that a crash could
+    // undo. On failure the records are already durable and the next replay
+    // fails the same way, so stop now.
     std::string error;
     if (!head_.apply_batch(recs, error)) {
         std::fprintf(stderr, "apply after sync: %s\n", error.c_str());
@@ -93,9 +99,6 @@ void Writer::process(std::vector<Pending>& batch) {
     }
 }
 
-// Checks req against the store and the earlier accepted requests in this
-// batch. If it is accepted, assigns IDs, updates state, appends one encoded
-// record to out, and keeps the record in recs for Head::apply_batch.
 bool Writer::accept(const WriteRequest& req, BatchState& state, std::vector<std::byte>& out,
                     std::vector<CommitRecord>& recs) {
     // Last timestamp per series inside this request. state is changed only

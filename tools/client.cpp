@@ -54,10 +54,9 @@ int connect_to(uint16_t port) {
     return fd;
 }
 
-// One buffer, so one send() carries the frame. A separate send() for the
-// header can stall about 40 ms (Nagle + delayed ACK).
-// value = ts_ms, so a checker can compute the expected bits. A double holds
-// every integer up to 2^53 exactly.
+// One send() per frame: a separate header send() can stall 40 ms (Nagle +
+// delayed ACK). value = ts_ms (exact below 2^53), so a checker can compute the
+// bits.
 std::vector<std::byte> encode_request(const std::string& name, int64_t ts0, int k) {
     const uint32_t len = 1 + 2 + 2 + static_cast<uint32_t>(name.size()) + 4 + 16 * k;
     std::vector<std::byte> frame;

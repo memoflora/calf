@@ -153,6 +153,10 @@ std::optional<Request> parse_request(std::span<const std::byte> payload) {
     uint8_t msg_type;
     if (!r.u8(msg_type)) return std::nullopt;
     if (msg_type == kMsgQuery) return parse_query(r);
+    if (msg_type == kMsgStats) {
+        if (r.remaining() != 0) return std::nullopt;
+        return StatsRequest{};
+    }
     if (msg_type != kMsgWrite) return std::nullopt;
 
     uint16_t series_count;
