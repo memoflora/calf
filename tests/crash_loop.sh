@@ -186,6 +186,7 @@ with open(path, "r+b") as f:
 EOF
 start_server "$W"
 grep -q "torn tail" "$LAST_ERR" || fail "corrupt case: no torn tail reported"
+grep -q "truncated to" "$LAST_ERR" || fail "corrupt case: file not truncated"
 dump "$W" "$DIR/c_mid.txt"
 J=$(check count "$DIR/c_mid.txt")
 if (( J == 0 || J >= N )); then fail "corrupt case: $J of $N records kept"; fi

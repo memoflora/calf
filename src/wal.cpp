@@ -66,24 +66,19 @@ std::optional<std::vector<std::byte>> read_file(const std::string& path) {
 }
 
 std::optional<Wal> Wal::open(const std::string& path) {
-    // O_EXCL first, to know if this call created the file: only a new file
-    // needs the directory sync.
-    const int flags = O_RDWR | O_APPEND | O_CLOEXEC;
-    bool created = true;
-    int fd = ::open(path.c_str(), flags | O_CREAT | O_EXCL, 0644);
-    if (fd < 0 && errno == EEXIST) {
-        created = false;
-        fd = ::open(path.c_str(), flags);
-    }
+    int fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
     if (fd < 0) {
         std::perror(path.c_str());
         return std::nullopt;
     }
     Wal wal(fd);
 
-    // The new directory entry is not durable until the directory is synced.
+    // The directory entry is not durable until the directory is synced.
     // Without this, a crash can lose the whole file, acked records included.
-    if (created && !sync_parent_dir(path)) return std::nullopt;
+    // Sync on every open, not only when the file is new: a crash after the
+    // create but before the sync leaves an existing file whose entry may
+    // still not be durable.
+    if (!sync_parent_dir(path)) return std::nullopt;
     return wal;
 }
 

@@ -44,3 +44,24 @@ add_test(NAME record_test COMMAND record_test)
 add_test(NAME crash_loop
          COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/crash_loop.sh "" $<TARGET_FILE_DIR:server>)
 set_tests_properties(crash_loop PROPERTIES LABELS slow TIMEOUT 300)
+
+# bad_frames.py reuses the series names s0, s1, ..., so on an old WAL its valid
+# cases get status 1. Each run starts a server on a new WAL in a temp dir.
+# A TSan report does not stop the server, so its stderr is checked too.
+add_test(NAME bad_frames
+         COMMAND bash -c [=[
+dir=$(mktemp -d)
+"$1" 17171 "$dir/bad_frames.wal" 2>"$dir/server.err" &
+pid=$!
+trap 'kill -9 $pid 2>/dev/null; rm -rf "$dir"' EXIT
+for _ in $(seq 400); do
+    grep -q "listening on" "$dir/server.err" && break
+    if ! kill -0 $pid 2>/dev/null; then cat "$dir/server.err"; exit 1; fi
+    sleep 0.05
+done
+python3 "$2" 17171
+rc=$?
+if grep -qE "Sanitizer|runtime error" "$dir/server.err"; then cat "$dir/server.err"; rc=1; fi
+exit $rc
+]=] bad_frames $<TARGET_FILE:server> ${CMAKE_CURRENT_SOURCE_DIR}/tests/bad_frames.py)
+set_tests_properties(bad_frames PROPERTIES TIMEOUT 120)
