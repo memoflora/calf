@@ -2,6 +2,7 @@
 
 #include "head.h"
 #include "protocol.h"
+#include "record.h"
 #include "wal.h"
 
 #include <condition_variable>
@@ -42,7 +43,8 @@ private:
 
     void run();
     void process(std::vector<Pending>& batch);
-    bool accept(const WriteRequest& req, BatchState& state, std::vector<std::byte>& out);
+    bool accept(const WriteRequest& req, BatchState& state, std::vector<std::byte>& out,
+                std::vector<CommitRecord>& recs);
     uint32_t series_id(const std::string& name, const BatchState& state) const;
 
     std::mutex mu_;

@@ -57,10 +57,11 @@ void Writer::run() {
 void Writer::process(std::vector<Pending>& batch) {
     BatchState state;
     std::vector<std::byte> records;
+    std::vector<CommitRecord> recs;
     std::vector<Status> status;
     status.reserve(batch.size());
     for (Pending& p : batch) {
-        status.push_back(accept(p.req, state, records) ? Status::ok : Status::rejected);
+        status.push_back(accept(p.req, state, records, recs) ? Status::ok : Status::rejected);
     }
 
     if (!records.empty()) {
@@ -78,13 +79,13 @@ void Writer::process(std::vector<Pending>& batch) {
     }
 
     // Apply only after the sync, so the store never holds a write that a
-    // crash could undo. Reads from the store come in a later step.
-    for (size_t i = 0; i < batch.size(); ++i) {
-        if (status[i] != Status::ok) continue;
-        for (const Series& s : batch[i].req.series) {
-            if (s.samples.empty()) continue;
-            head_.append(s.name, series_id(s.name, state), s.samples);
-        }
+    // crash could undo. A false result means the writer and Head disagree.
+    // The records are already durable, and the next replay refuses to start
+    // on the same record, so stopping now gives the same behavior.
+    std::string error;
+    if (!head_.apply_batch(recs, error)) {
+        std::fprintf(stderr, "apply after sync: %s\n", error.c_str());
+        std::abort();
     }
 
     for (size_t i = 0; i < batch.size(); ++i) {
@@ -93,9 +94,10 @@ void Writer::process(std::vector<Pending>& batch) {
 }
 
 // Checks req against the store and the earlier accepted requests in this
-// batch. If it is accepted, assigns IDs, updates state, and appends one
-// record to out.
-bool Writer::accept(const WriteRequest& req, BatchState& state, std::vector<std::byte>& out) {
+// batch. If it is accepted, assigns IDs, updates state, appends one encoded
+// record to out, and keeps the record in recs for Head::apply.
+bool Writer::accept(const WriteRequest& req, BatchState& state, std::vector<std::byte>& out,
+                    std::vector<CommitRecord>& recs) {
     // Last timestamp per series inside this request. state is changed only
     // after the whole request passes, so a rejection leaves no trace.
     std::unordered_map<std::string, int64_t> local;
@@ -109,7 +111,7 @@ bool Writer::accept(const WriteRequest& req, BatchState& state, std::vector<std:
         } else if (auto it = state.last_ts.find(s.name); it != state.last_ts.end()) {
             last = it->second;
         } else if (const SeriesData* d = head_.find(s.name)) {
-            last = d->samples.back().ts_ms;
+            last = d->last_ts;
         }
         for (const Sample& smp : s.samples) {
             if (last && smp.ts_ms <= *last) return false;
@@ -134,6 +136,7 @@ bool Writer::accept(const WriteRequest& req, BatchState& state, std::vector<std:
     }
     for (auto& [name, ts] : local) state.last_ts[name] = ts;
     encode_commit(rec, out);
+    recs.push_back(std::move(rec));
     return true;
 }
 

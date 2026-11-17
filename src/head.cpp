@@ -1,5 +1,7 @@
 #include "head.h"
 
+#include <cstdio>
+#include <cstdlib>
 #include <unordered_set>
 
 namespace calf {
@@ -9,13 +11,23 @@ const SeriesData* Head::find(const std::string& name) const {
     return it == series_.end() ? nullptr : &it->second;
 }
 
-void Head::append(const std::string& name, uint32_t id, std::span<const Sample> samples) {
-    auto [it, created] = series_.try_emplace(name, SeriesData{id, {}});
-    if (created) {
-        if (names_.size() <= id) names_.resize(id + 1);
-        names_[id] = name;
-    }
-    it->second.samples.insert(it->second.samples.end(), samples.begin(), samples.end());
+std::vector<Sample> Head::samples(const std::string& name) const {
+    std::vector<Sample> out;
+    const SeriesData* d = find(name);
+    if (!d) return out;
+    auto decode = [&out](const Chunk& c) {
+        ChunkIterator it(c.bytes());
+        while (it.next()) out.push_back({it.ts(), it.value()});
+        // Chunks in memory come only from Chunk::append, so an error here
+        // is a bug in the encoder or the decoder.
+        if (it.error()) {
+            std::fprintf(stderr, "chunk decode error\n");
+            std::abort();
+        }
+    };
+    for (const Chunk& c : d->full) decode(c);
+    decode(d->open);
+    return out;
 }
 
 bool Head::apply(const CommitRecord& rec, std::string& error) {
@@ -53,7 +65,7 @@ bool Head::apply(const CommitRecord& rec, std::string& error) {
         auto it = last.find(s.series_id);
         if (it == last.end() && s.series_id < old) {
             const SeriesData& d = series_.at(names_[s.series_id]);
-            it = last.emplace(s.series_id, d.samples.back().ts_ms).first;
+            it = last.emplace(s.series_id, d.last_ts).first;
         }
         if (it != last.end() && s.ts_ms <= it->second) {
             error = "timestamp " + std::to_string(s.ts_ms) + " is not increasing";
@@ -62,8 +74,8 @@ bool Head::apply(const CommitRecord& rec, std::string& error) {
         last[s.series_id] = s.ts_ms;
     }
 
-    // The writer finds the last timestamp with samples.back(), so a series
-    // with no samples would be undefined behavior there.
+    // The writer never produces a new series with no samples, so such a
+    // record is damaged. last_ts of that series would also be invalid.
     for (const NewSeries& s : rec.new_series) {
         if (!last.contains(s.id)) {
             error = "new series '" + s.name + "' has no samples";
@@ -71,11 +83,29 @@ bool Head::apply(const CommitRecord& rec, std::string& error) {
         }
     }
 
+    // The IDs were checked to be old, old + 1, ..., so push_back puts each
+    // name at its ID.
+    for (const NewSeries& s : rec.new_series) {
+        series_.emplace(s.name, SeriesData{s.id, {}, Chunk(), 0});
+        names_.push_back(s.name);
+    }
+    // An empty chunk accepts any ts, so the cut below depends on the check
+    // above that every ts is greater than the last one of its series.
     for (const RecordSample& s : rec.samples) {
-        const std::string& name = s.series_id < old ? names_[s.series_id]
-                                                    : rec.new_series[s.series_id - old].name;
-        Sample smp{s.ts_ms, s.value};
-        append(name, s.series_id, std::span(&smp, 1));
+        SeriesData& d = series_.at(names_[s.series_id]);
+        if (!d.open.fits(s.ts_ms)) {
+            d.full.push_back(std::move(d.open));
+            d.open = Chunk();
+        }
+        d.open.append(s.ts_ms, s.value);
+        d.last_ts = s.ts_ms;
+    }
+    return true;
+}
+
+bool Head::apply_batch(std::span<const CommitRecord> recs, std::string& error) {
+    for (const CommitRecord& rec : recs) {
+        if (!apply(rec, error)) return false;
     }
     return true;
 }

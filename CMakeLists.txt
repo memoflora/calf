@@ -25,7 +25,8 @@ target_include_directories(calf_protocol PUBLIC src)
 
 find_package(ZLIB REQUIRED)
 
-add_library(calf_core STATIC src/record.cpp src/wal.cpp src/head.cpp src/writer.cpp)
+add_library(calf_core STATIC src/record.cpp src/wal.cpp src/head.cpp src/writer.cpp
+                             src/chunk/bitstream.cpp src/chunk/xor_chunk.cpp)
 target_link_libraries(calf_core PUBLIC calf_protocol ZLIB::ZLIB)
 
 add_executable(server src/main.cpp src/server.cpp)
@@ -34,10 +35,17 @@ target_link_libraries(server PRIVATE calf_core)
 add_executable(client tools/client.cpp)
 target_link_libraries(client PRIVATE calf_protocol)
 
+add_executable(chunk_stats tools/chunk_stats.cpp)
+target_link_libraries(chunk_stats PRIVATE calf_core)
+
 enable_testing()
 add_executable(record_test tests/record_test.cpp)
 target_link_libraries(record_test PRIVATE calf_core)
 add_test(NAME record_test COMMAND record_test)
+
+add_executable(chunk_test tests/chunk_test.cpp)
+target_link_libraries(chunk_test PRIVATE calf_core)
+add_test(NAME chunk_test COMMAND chunk_test)
 
 # The empty seed makes the script pick one and print it, so a failed run can
 # be repeated.

@@ -196,7 +196,7 @@ void expect_bad(const calf::CommitRecord& rec) {
     assert(!err.empty());
     // Head is unchanged: the next valid record still applies.
     assert(h.next_id() == 1);
-    assert(h.find("a")->samples.size() == 1);
+    assert(h.samples("a").size() == 1);
     assert(h.apply({{{1, "b"}}, {{0, 11, 0.0}, {1, 1, 0.0}}}, err));
 }
 
@@ -217,8 +217,8 @@ void test_bad_content() {
     std::string err;
     assert(h.apply({{{1, "b"}}, {{1, 1, 0.0}, {0, 20, 0.0}, {1, 2, 0.0}}}, err));
     assert(h.next_id() == 2);
-    assert(h.find("a")->samples.back().ts_ms == 20);
-    assert(h.find("b")->id == 1 && h.find("b")->samples.size() == 2);
+    assert(h.find("a")->last_ts == 20);
+    assert(h.find("b")->id == 1 && h.samples("b").size() == 2);
 }
 
 }  // namespace
