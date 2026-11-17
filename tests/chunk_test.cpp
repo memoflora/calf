@@ -283,6 +283,10 @@ void test_chunk_random() {
     }
 }
 
+bool apply(calf::Head& h, const calf::CommitRecord& rec, std::string& err) {
+    return h.apply_batch({&rec, 1}, err);
+}
+
 void test_head() {
     std::mt19937_64 rng(4);
     calf::Head h;
@@ -314,7 +318,7 @@ void test_head() {
             expected[id].push_back({last[id], v});
         }
         std::string error;
-        assert(h.apply(rec, error));
+        assert(apply(h, rec, error));
 
         // Full chunks never change after the cut: earlier copies still match.
         for (size_t id = 0; id < names.size(); ++id) {

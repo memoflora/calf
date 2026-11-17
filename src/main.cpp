@@ -49,7 +49,8 @@ std::optional<Replayed> replay(std::span<const std::byte> bytes, const std::stri
     }
     std::string error;
     for (size_t i = 0; i < d.records.size(); ++i) {
-        if (!r.head.apply(d.records[i], error)) {
+        // One record per call, so the error names the bad record.
+        if (!r.head.apply_batch({&d.records[i], 1}, error)) {
             std::fprintf(stderr, "%s: record %zu: %s\n", path.c_str(), i, error.c_str());
             return std::nullopt;
         }

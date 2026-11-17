@@ -23,8 +23,9 @@ enum class Status : uint8_t { ok = kStatusOk, rejected = kStatusError };
 // destroying a joinable std::thread calls std::terminate.
 class Writer {
 public:
-    // head and next_id come from replay. max_batch 0 means no limit.
-    Writer(Wal wal, Head head, uint32_t next_id, size_t max_batch);
+    // head and next_id come from replay. head must outlive the Writer.
+    // max_batch 0 means no limit.
+    Writer(Wal wal, Head& head, uint32_t next_id, size_t max_batch);
 
     // The future is ready after the request is durable or rejected.
     std::future<Status> submit(WriteRequest req);
@@ -53,7 +54,7 @@ private:
 
     // Used only by the writer thread.
     Wal wal_;
-    Head head_;
+    Head& head_;  // query threads read it too, under its lock
     const size_t max_batch_;
     uint32_t next_id_;
 

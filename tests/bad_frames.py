@@ -50,6 +50,10 @@ def frame(p):
     return struct.pack("<I", len(p)) + p
 
 
+def query_payload(name, start, end):
+    return struct.pack("<BH", 2, len(name)) + name + struct.pack("<qq", start, end)
+
+
 def result(s):
     data = b""
     try:
@@ -139,6 +143,37 @@ def same_ts_from_many_connections():
         [r for r in results if r not in (OK, REJECTED)])
 
 
+def recv_exact(s, n):
+    data = b""
+    while len(data) < n:
+        chunk = s.recv(n - len(data))
+        if not chunk:
+            break
+        data += chunk
+    return data
+
+
+def write_then_query():
+    # A WRITE, then a QUERY for the same series: the OK reply must already
+    # make the samples visible.
+    name = new_name()
+    s = connect()
+    s.sendall(frame(multi([(name, [5, 6])])))
+    r = result(s)
+    if r != OK:
+        return "write gave %s" % r
+    s.sendall(frame(query_payload(name, 0, 100)))
+    head = recv_exact(s, 9)
+    want = struct.pack("<IBI", 1 + 4 + 32, 0, 2)
+    if head != want:
+        return "query reply header %r" % head
+    body = recv_exact(s, 32)
+    s.close()
+    if body != struct.pack("<qQqQ", 5, 0, 6, 0):
+        return "query samples %r" % body
+    return OK
+
+
 def abrupt_closes_then_valid():
     # SO_LINGER 0 makes close() send RST. The server's reply then hits a dead
     # peer, which raises SIGPIPE if the server does not ignore it.
@@ -164,7 +199,16 @@ CASES = [
      lambda: send_and_check(struct.pack("<I", 16 * 1024 * 1024 + 1))),
     ("length 0xFFFFFFFF", CLOSED, lambda: send_and_check(struct.pack("<I", 0xFFFFFFFF))),
     ("empty payload", CLOSED, lambda: send_and_check(frame(b""))),
-    ("msg_type 2", CLOSED, lambda: send_and_check(frame(payload(msg_type=2)))),
+    ("msg_type 3", CLOSED, lambda: send_and_check(frame(payload(msg_type=3)))),
+    ("QUERY name_len past end", CLOSED,
+     lambda: send_and_check(frame(struct.pack("<BH", 2, 500) + b"ab"))),
+    ("QUERY ends before end_ms", CLOSED,
+     lambda: send_and_check(frame(query_payload(b"a", 0, 9)[:-3]))),
+    ("QUERY with 1 extra byte", CLOSED,
+     lambda: send_and_check(frame(query_payload(b"a", 0, 9) + b"\0"))),
+    ("QUERY start > end", REJECTED,
+     lambda: send_and_check(frame(query_payload(b"a", 9, 0)))),
+    ("WRITE then QUERY on one connection", OK, write_then_query),
     ("sample_count 0xFFFFFFFF", CLOSED,
      lambda: send_and_check(frame(payload(samples=0, sample_count=0xFFFFFFFF)))),
     ("sample_count 2, data for 1", CLOSED,

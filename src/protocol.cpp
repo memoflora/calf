@@ -127,11 +127,33 @@ private:
 
 }  // namespace
 
-std::optional<WriteRequest> parse_request(std::span<const std::byte> payload) {
+namespace {
+
+std::optional<Request> parse_query(Reader& r) {
+    QueryRequest q;
+    uint16_t name_len;
+    std::span<const std::byte> name;
+    uint64_t start_bits;
+    uint64_t end_bits;
+    if (!r.u16(name_len) || !r.take(name_len, name) || !r.u64(start_bits) ||
+        !r.u64(end_bits) || r.remaining() != 0) {
+        return std::nullopt;
+    }
+    q.name.assign(reinterpret_cast<const char*>(name.data()), name.size());
+    q.start_ms = static_cast<int64_t>(start_bits);
+    q.end_ms = static_cast<int64_t>(end_bits);
+    return q;
+}
+
+}  // namespace
+
+std::optional<Request> parse_request(std::span<const std::byte> payload) {
     Reader r(payload);
 
     uint8_t msg_type;
-    if (!r.u8(msg_type) || msg_type != kMsgWrite) return std::nullopt;
+    if (!r.u8(msg_type)) return std::nullopt;
+    if (msg_type == kMsgQuery) return parse_query(r);
+    if (msg_type != kMsgWrite) return std::nullopt;
 
     uint16_t series_count;
     if (!r.u16(series_count)) return std::nullopt;

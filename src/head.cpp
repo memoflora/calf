@@ -2,9 +2,28 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
 #include <unordered_set>
 
 namespace calf {
+
+namespace {
+
+// Chunks in memory come only from Chunk::append, so an error here is a bug
+// in the encoder or the decoder.
+void decode_into(std::span<const std::byte> bytes, std::vector<Sample>& out) {
+    ChunkIterator it(bytes);
+    while (it.next()) out.push_back({it.ts(), it.value()});
+    if (it.error()) {
+        std::fprintf(stderr, "chunk decode error\n");
+        std::abort();
+    }
+}
+
+}  // namespace
+
+Head::Head(Head&& other)
+    : series_(std::move(other.series_)), names_(std::move(other.names_)) {}
 
 const SeriesData* Head::find(const std::string& name) const {
     auto it = series_.find(name);
@@ -12,21 +31,50 @@ const SeriesData* Head::find(const std::string& name) const {
 }
 
 std::vector<Sample> Head::samples(const std::string& name) const {
+    std::shared_lock lock(mu_);
     std::vector<Sample> out;
     const SeriesData* d = find(name);
     if (!d) return out;
-    auto decode = [&out](const Chunk& c) {
-        ChunkIterator it(c.bytes());
-        while (it.next()) out.push_back({it.ts(), it.value()});
-        // Chunks in memory come only from Chunk::append, so an error here
-        // is a bug in the encoder or the decoder.
-        if (it.error()) {
-            std::fprintf(stderr, "chunk decode error\n");
-            std::abort();
+    for (const Chunk& c : d->full) decode_into(c.bytes(), out);
+    decode_into(d->open.bytes(), out);
+    return out;
+}
+
+std::optional<std::vector<Sample>> Head::query(const std::string& name, int64_t start,
+                                               int64_t end) const {
+    if (start > end) return std::nullopt;
+
+    // Copy the bytes under the lock and decode after it is released: the
+    // writer waits for the unique lock while any query holds the shared
+    // lock, and every ack waits for the writer.
+    std::vector<std::vector<std::byte>> copies;
+    {
+        std::shared_lock lock(mu_);
+        const SeriesData* d = find(name);
+        if (!d) return std::vector<Sample>{};
+        for (const Chunk& c : d->full) {
+            if (c.min_t() > end) break;  // full chunks are sorted by time
+            if (c.max_t() >= start) copies.emplace_back(c.bytes().begin(), c.bytes().end());
         }
-    };
-    for (const Chunk& c : d->full) decode(c);
-    decode(d->open);
+        // The writer appends to the open chunk, so this copy must also be
+        // made under the lock. min_t and max_t mean nothing when count is 0.
+        const Chunk& o = d->open;
+        if (o.count() > 0 && o.min_t() <= end && o.max_t() >= start) {
+            copies.emplace_back(o.bytes().begin(), o.bytes().end());
+        }
+    }
+
+    std::vector<Sample> all;
+    std::vector<Sample> out;
+    for (const auto& bytes : copies) {
+        all.clear();
+        decode_into(bytes, all);
+        for (const Sample& s : all) {
+            if (s.ts_ms < start || s.ts_ms > end) continue;
+            if (out.size() == kMaxQuerySamples) return std::nullopt;
+            out.push_back(s);
+        }
+    }
     return out;
 }
 
@@ -104,6 +152,8 @@ bool Head::apply(const CommitRecord& rec, std::string& error) {
 }
 
 bool Head::apply_batch(std::span<const CommitRecord> recs, std::string& error) {
+    // One lock for the whole batch, so a query sees all of it or none of it.
+    std::unique_lock lock(mu_);
     for (const CommitRecord& rec : recs) {
         if (!apply(rec, error)) return false;
     }

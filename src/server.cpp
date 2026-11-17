@@ -5,6 +5,7 @@
 
 #include <arpa/inet.h>
 #include <array>
+#include <bit>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -40,7 +41,22 @@ std::vector<std::byte> make_reply(uint8_t status) {
     return reply;
 }
 
-void handle_connection(int fd, Writer& writer) {
+std::vector<std::byte> make_query_reply(const std::optional<std::vector<Sample>>& samples) {
+    if (!samples) return make_reply(kStatusError);
+    const auto n = static_cast<uint32_t>(samples->size());
+    std::vector<std::byte> reply;
+    reply.reserve(4 + 1 + 4 + 16 * size_t{n});
+    put_u32(reply, 1 + 4 + 16 * n);  // n <= kMaxQuerySamples, so this cannot wrap
+    reply.push_back(std::byte{kStatusOk});
+    put_u32(reply, n);
+    for (const Sample& s : *samples) {
+        put_u64(reply, static_cast<uint64_t>(s.ts_ms));
+        put_u64(reply, std::bit_cast<uint64_t>(s.value));
+    }
+    return reply;
+}
+
+void handle_connection(int fd, Writer& writer, const Head& head) {
     FdGuard guard(fd);
 
     for (;;) {
@@ -53,13 +69,21 @@ void handle_connection(int fd, Writer& writer) {
 
         std::vector<std::byte> payload(len);
         if (!read_exact(fd, payload)) return;
-        std::optional<WriteRequest> req = parse_request(payload);
+        std::optional<Request> req = parse_request(payload);
         if (!req) return;
 
-        // get() blocks until the writer has synced or rejected the request.
-        // This thread reads no new frame meanwhile: one request in flight.
-        Status status = writer.submit(std::move(*req)).get();
-        if (!write_exact(fd, make_reply(static_cast<uint8_t>(status)))) return;
+        // This thread reads no new frame until it sends the reply: one
+        // request in flight.
+        std::vector<std::byte> reply;
+        if (auto* w = std::get_if<WriteRequest>(&*req)) {
+            // get() blocks until the writer has synced or rejected the request.
+            Status status = writer.submit(std::move(*w)).get();
+            reply = make_reply(static_cast<uint8_t>(status));
+        } else {
+            const auto& q = std::get<QueryRequest>(*req);
+            reply = make_query_reply(head.query(q.name, q.start_ms, q.end_ms));
+        }
+        if (!write_exact(fd, reply)) return;
     }
 }
 
@@ -91,7 +115,7 @@ int run_server(uint16_t port, Wal wal, Head head, uint32_t next_id, size_t max_b
         std::perror("listen");
         return 1;
     }
-    Writer writer(std::move(wal), std::move(head), next_id, max_batch);
+    Writer writer(std::move(wal), head, next_id, max_batch);
     std::fprintf(stderr, "listening on 127.0.0.1:%u\n", static_cast<unsigned>(port));
 
     for (;;) {
@@ -102,8 +126,8 @@ int run_server(uint16_t port, Wal wal, Head head, uint32_t next_id, size_t max_b
             // Other errors (for example EMFILE) repeat at once, so a retry
             // spins at 100% CPU. The connection cap is for later.
             std::perror("accept");
-            // _exit, not return: detached threads still use writer, which
-            // lives in this frame. Acked writes are already durable.
+            // _exit, not return: detached threads still use writer and head,
+            // which live in this frame. Acked writes are already durable.
             std::_Exit(1);
         }
 
@@ -113,9 +137,9 @@ int run_server(uint16_t port, Wal wal, Head head, uint32_t next_id, size_t max_b
         // [fd], not [&fd]: fd dies with this iteration, the detached thread
         // does not.
         try {
-            // &writer is safe: writer lives until the process ends, because
-            // this function never returns after the writer starts.
-            std::thread([fd, &writer] { handle_connection(fd, writer); }).detach();
+            // &writer and &head are safe: both live until the process ends,
+            // because this function never returns after the writer starts.
+            std::thread([fd, &writer, &head] { handle_connection(fd, writer, head); }).detach();
         } catch (const std::system_error& e) {
             // No thread started, so no FdGuard owns fd. Close it here.
             std::fprintf(stderr, "thread: %s\n", e.what());

@@ -38,6 +38,9 @@ target_link_libraries(client PRIVATE calf_protocol)
 add_executable(chunk_stats tools/chunk_stats.cpp)
 target_link_libraries(chunk_stats PRIVATE calf_core)
 
+add_executable(query tools/query.cpp)
+target_link_libraries(query PRIVATE calf_protocol)
+
 enable_testing()
 add_executable(record_test tests/record_test.cpp)
 target_link_libraries(record_test PRIVATE calf_core)
@@ -46,6 +49,15 @@ add_test(NAME record_test COMMAND record_test)
 add_executable(chunk_test tests/chunk_test.cpp)
 target_link_libraries(chunk_test PRIVATE calf_core)
 add_test(NAME chunk_test COMMAND chunk_test)
+
+add_executable(query_test tests/query_test.cpp)
+target_link_libraries(query_test PRIVATE calf_core)
+add_test(NAME query_test COMMAND query_test)
+
+# The relative script path needs the source dir as the working directory.
+add_test(NAME query_e2e COMMAND bash tests/query_e2e.sh $<TARGET_FILE_DIR:server>
+         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+set_tests_properties(query_e2e PROPERTIES TIMEOUT 120)
 
 # The empty seed makes the script pick one and print it, so a failed run can
 # be repeated.

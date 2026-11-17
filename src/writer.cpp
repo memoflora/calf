@@ -9,9 +9,9 @@
 
 namespace calf {
 
-Writer::Writer(Wal wal, Head head, uint32_t next_id, size_t max_batch)
+Writer::Writer(Wal wal, Head& head, uint32_t next_id, size_t max_batch)
     : wal_(std::move(wal)),
-      head_(std::move(head)),
+      head_(head),
       max_batch_(max_batch),
       next_id_(next_id),
       thread_([this] { run(); }) {}
@@ -95,7 +95,7 @@ void Writer::process(std::vector<Pending>& batch) {
 
 // Checks req against the store and the earlier accepted requests in this
 // batch. If it is accepted, assigns IDs, updates state, appends one encoded
-// record to out, and keeps the record in recs for Head::apply.
+// record to out, and keeps the record in recs for Head::apply_batch.
 bool Writer::accept(const WriteRequest& req, BatchState& state, std::vector<std::byte>& out,
                     std::vector<CommitRecord>& recs) {
     // Last timestamp per series inside this request. state is changed only

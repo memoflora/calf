@@ -181,23 +181,27 @@ void test_bad_payload() {
     expect_bad_payload(name);
 }
 
+bool apply(calf::Head& h, const calf::CommitRecord& rec, std::string& err) {
+    return h.apply_batch({&rec, 1}, err);
+}
+
 // Head with series "a" (id 0) holding ts 10.
 calf::Head head_with_a() {
     calf::Head h;
     std::string err;
-    assert(h.apply({{{0, "a"}}, {{0, 10, 1.0}}}, err));
+    assert(apply(h, {{{0, "a"}}, {{0, 10, 1.0}}}, err));
     return h;
 }
 
 void expect_bad(const calf::CommitRecord& rec) {
     calf::Head h = head_with_a();
     std::string err;
-    assert(!h.apply(rec, err));
+    assert(!apply(h, rec, err));
     assert(!err.empty());
     // Head is unchanged: the next valid record still applies.
     assert(h.next_id() == 1);
     assert(h.samples("a").size() == 1);
-    assert(h.apply({{{1, "b"}}, {{0, 11, 0.0}, {1, 1, 0.0}}}, err));
+    assert(apply(h, {{{1, "b"}}, {{0, 11, 0.0}, {1, 1, 0.0}}}, err));
 }
 
 void test_bad_content() {
@@ -215,7 +219,7 @@ void test_bad_content() {
 
     calf::Head h = head_with_a();
     std::string err;
-    assert(h.apply({{{1, "b"}}, {{1, 1, 0.0}, {0, 20, 0.0}, {1, 2, 0.0}}}, err));
+    assert(apply(h, {{{1, "b"}}, {{1, 1, 0.0}, {0, 20, 0.0}, {1, 2, 0.0}}}, err));
     assert(h.next_id() == 2);
     assert(h.find("a")->last_ts == 20);
     assert(h.find("b")->id == 1 && h.samples("b").size() == 2);
