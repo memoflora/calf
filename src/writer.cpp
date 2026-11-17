@@ -9,8 +9,12 @@
 
 namespace calf {
 
-Writer::Writer(Wal wal, size_t max_batch)
-    : wal_(std::move(wal)), max_batch_(max_batch), thread_([this] { run(); }) {}
+Writer::Writer(Wal wal, Head head, uint32_t next_id, size_t max_batch)
+    : wal_(std::move(wal)),
+      head_(std::move(head)),
+      max_batch_(max_batch),
+      next_id_(next_id),
+      thread_([this] { run(); }) {}
 
 std::future<Status> Writer::submit(WriteRequest req) {
     Pending p{std::move(req), {}};

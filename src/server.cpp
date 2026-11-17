@@ -65,7 +65,7 @@ void handle_connection(int fd, Writer& writer) {
 
 }  // namespace
 
-int run_server(uint16_t port, Wal wal, size_t max_batch) {
+int run_server(uint16_t port, Wal wal, Head head, uint32_t next_id, size_t max_batch) {
     int lfd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (lfd < 0) {
         std::perror("socket");
@@ -91,7 +91,7 @@ int run_server(uint16_t port, Wal wal, size_t max_batch) {
         std::perror("listen");
         return 1;
     }
-    Writer writer(std::move(wal), max_batch);
+    Writer writer(std::move(wal), std::move(head), next_id, max_batch);
     std::fprintf(stderr, "listening on 127.0.0.1:%u\n", static_cast<unsigned>(port));
 
     for (;;) {

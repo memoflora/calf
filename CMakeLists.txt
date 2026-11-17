@@ -38,3 +38,9 @@ enable_testing()
 add_executable(record_test tests/record_test.cpp)
 target_link_libraries(record_test PRIVATE calf_core)
 add_test(NAME record_test COMMAND record_test)
+
+# The empty seed makes the script pick one and print it, so a failed run can
+# be repeated.
+add_test(NAME crash_loop
+         COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/crash_loop.sh "" $<TARGET_FILE_DIR:server>)
+set_tests_properties(crash_loop PROPERTIES LABELS slow TIMEOUT 300)
